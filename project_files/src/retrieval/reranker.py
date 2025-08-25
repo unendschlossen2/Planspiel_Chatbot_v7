@@ -20,7 +20,7 @@ def gap_based_rerank_and_filter(
         min_chunks_to_llm: int = 1,
         max_chunks_to_llm: int = 5,
         min_chunks_for_gap_detection: int = 4,
-        gap_detection_factor: float = 0.25,
+        gap_detection_factor: float = 0.2,
         small_epsilon: float = 1e-5
 ) -> List[Dict[str, Any]]:
 

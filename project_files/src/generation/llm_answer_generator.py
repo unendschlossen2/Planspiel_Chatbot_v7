@@ -1,26 +1,37 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generator, Tuple
 import ollama
+import os
 
-def format_retrieved_context(retrieved_chunks: List[Dict[str, Any]]) -> str:
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+def format_retrieved_context(retrieved_chunks: List[Dict[str, Any]]) -> Tuple[str, Dict[int, Dict[str, str]]]:
     if not retrieved_chunks:
-        return "Kein relevanter Kontext wurde aus dem Handbuch abgerufen."
+        return "Kein relevanter Kontext wurde aus dem Handbuch abgerufen.", {}
 
-    context_str = "Abgerufene Kontext-Schnipsel aus dem TOPSIM Handbuch:\n"
+    context_str = ""
+    citation_map = {}
     for i, chunk in enumerate(retrieved_chunks):
-        context_str += f"---\nSchnipsel {i+1}:\n"
+        source_id = i + 1
+        # Maschinenlesbarer Tag für das LLM
+        context_str += f"[Source ID: {source_id}]\n"
+
         metadata = chunk.get('metadata', {})
         document_content = chunk.get('document', "N/A")
 
-        source = metadata.get('source_filename', 'Unbekannte Quelle')
-        header = metadata.get('header_text', 'N/A')
-        original_base = metadata.get('original_base_header', 'N/A')
+        source_filename = metadata.get('source_filename', 'Unbekannte Quelle')
+        header_text = metadata.get('header_text', 'N/A')
 
-        context_str += f"  Quelldatei: {source}\n"
-        context_str += f"  Ursprünglicher Abschnitt: {original_base}\n"
-        context_str += f"  Spezifische Überschrift: {header}\n"
-        context_str += f"  Inhalt: {document_content}\n"
-    context_str += "---\n"
-    return context_str
+        context_str += f"  Quelldatei: {source_filename}\n"
+        context_str += f"  Spezifische Überschrift: {header_text}\n"
+        context_str += f"  Inhalt: {document_content}\n---\n"
+
+        # Befüllen der Citation Map
+        citation_map[source_id] = {
+            "filename": source_filename,
+            "header": header_text
+        }
+
+    return context_str, citation_map
 
 def generate_llm_answer(
         user_query: str,
@@ -29,20 +40,15 @@ def generate_llm_answer(
         ollama_host: Optional[str] = None,
         ollama_options: Optional[Dict[str, Any]] = None,
         prompt_template_str: Optional[str] = None
-) -> str:
+) -> Tuple[Generator[str, None, None], Dict[int, Dict[str, str]]]:
 
-    formatted_context = format_retrieved_context(retrieved_chunks)
+    formatted_context, citation_map = format_retrieved_context(retrieved_chunks)
 
     if prompt_template_str:
         current_prompt_template = prompt_template_str
     else:
-        current_prompt_template = """Sie sind ein Experte für das Planspiel TOPSIM und geben Antworten, die *ausschließlich* auf den bereitgestellten Kontext-Schnipseln aus dem TOPSIM Handbuch basieren.
-Wenn der Kontext die Informationen zur Beantwortung der Frage nicht enthält, müssen Sie klar angeben, dass die Informationen in den bereitgestellten Schnipseln nicht gefunden wurden.
-Erfinden Sie keine Informationen und verwenden Sie kein externes Wissen, außer Allgemeinwissen und unabhängige Fakten.
-Wenn möglich, können Sie auf den Abschnitt (nicht SCHNIPSEL!) verweisen, aus dem die Informationen stammen, falls dies die Klarheit erhöht.
-ANTWORTEN SIE IMMER AUF DEUTSCH, auch wenn die Frage auf Englisch ist.
-
-Bereitgestellter Kontext aus dem TOPSIM Handbuch:
+        # Vereinfachtes Template, da die Hauptanweisungen im Modelfile stehen
+        current_prompt_template = """Kontext-Schnipsel:
 {context}
 
 Benutzerfrage:
@@ -51,7 +57,6 @@ Benutzerfrage:
 Antwort:"""
 
     full_prompt = current_prompt_template.format(context=formatted_context, query=user_query)
-    print(f"Vollständiger Prompt an Ollama-Modell '{ollama_model_name}':\n{full_prompt}") # Optional for debugging
 
     try:
         client_args = {}
@@ -60,26 +65,29 @@ Antwort:"""
 
         client = ollama.Client(**client_args)
 
-        print(f"Sende Anfrage an Ollama-Modell '{ollama_model_name}'...")
-        response = client.chat(
+        print(f"Sende Anfrage an Ollama-Modell '{ollama_model_name}' (Streaming aktiviert)...")
+        response_generator = client.chat(
             model=ollama_model_name,
             messages=[{'role': 'user', 'content': full_prompt}],
-            stream=False,
+            stream=True,
             options=ollama_options
         )
-        llm_answer = response['message']['content'].strip()
-        print(f"Antwort von Ollama-Modell '{ollama_model_name}' empfangen.")
-        return llm_answer
+
+        def content_generator():
+            for chunk in response_generator:
+                if 'content' in chunk['message']:
+                    yield chunk['message']['content']
+
+        # Gibt den Generator und die Citation Map zurück
+        return content_generator(), citation_map
 
     except ollama.ResponseError as e:
-        error_message = f"Ollama API Antwortfehler für Modell '{ollama_model_name}': {e.status_code} - {e.error}"
-        print(error_message)
-        if e.status_code == 404 or (e.error and "model not found" in e.error.lower()):
-            return f"Fehler: Ollama-Modell '{ollama_model_name}' nicht gefunden. Bitte stellen Sie sicher, dass es über 'ollama pull {ollama_model_name}' heruntergeladen wurde. (Details: {e.error})"
-        return f"Fehler: API-Fehler vom Ollama-Modell '{ollama_model_name}'. (Details: {e.error})"
+        error_message = f"\nOllama API Antwortfehler für Modell '{ollama_model_name}': {e.status_code} - {e.error}"
+        def error_generator():
+            yield error_message
+        return error_generator(), {}
     except Exception as e:
-        error_message = f"Fehler bei der Interaktion mit dem Ollama-Modell '{ollama_model_name}': {e}"
-        print(error_message)
-        if "connection refused" in str(e).lower() or "failed to connect" in str(e).lower() or "Max retries exceeded with url" in str(e):
-            return f"Fehler: Konnte keine Verbindung zu Ollama herstellen. Bitte stellen Sie sicher, dass Ollama läuft (oft unter http://localhost:11434 und das Modell bereitgestellt wird). (Details: {e})"
-        return f"Fehler: Konnte keine Antwort vom Ollama-Modell '{ollama_model_name}' generieren. (Details: {e})"
+        error_message = f"\nFehler bei der Interaktion mit dem Ollama-Modell '{ollama_model_name}': {e}"
+        def error_generator():
+            yield error_message
+        return error_generator(), {}

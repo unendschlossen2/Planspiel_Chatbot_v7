@@ -1,17 +1,15 @@
-# src/settings.py
-
+import sys
 import yaml
 from pydantic import BaseModel, Field
 from typing import Dict, Any
 
-# --- Pydantic-Modelle zur Validierung ---
-# Diese Modelle definieren die erwartete Struktur und die Datentypen der config.yaml-Datei.
-# Falls das YAML-File ein Feld vermisst oder einen falschen Typ hat, wirft Pydantic einen klaren Fehler.
-
+# --- Pydantic Models for Validation ---
 class ModelSettings(BaseModel):
     embedding_id: str
     reranker_id: str
     ollama_llm: str
+    query_expander_id: str
+    condenser_model_id: str
     ollama_options: Dict[str, Any]
 
 class DatabaseSettings(BaseModel):
@@ -25,7 +23,10 @@ class ProcessingSettings(BaseModel):
     min_chars_per_chunk: int = Field(..., gt=0)
 
 class PipelineSettings(BaseModel):
+    enable_conversation_memory: bool
     use_reranker: bool
+    enable_query_expansion: bool
+    query_expansion_char_threshold: int
     retrieval_top_k: int
     default_retrieval_top_k: int
     min_chunks_to_llm: int
@@ -35,17 +36,17 @@ class PipelineSettings(BaseModel):
     gap_detection_factor: float
     small_epsilon: float
 
+class SystemSettings(BaseModel):
+    low_vram_mode: bool
+
 class AppSettings(BaseModel):
-    """Das Haupt-Einstellungsmodell, das alle anderen Einstellungs-Klassen aggregiert."""
     models: ModelSettings
     database: DatabaseSettings
     processing: ProcessingSettings
     pipeline: PipelineSettings
+    system: SystemSettings
 
-def load_settings(config_path: str = "config.yaml") -> AppSettings:
-    """
-    Lädt die Konfiguration aus einer YAML-Datei und validiert sie mit Pydantic.
-    """
+def load_settings(config_path: str = "helper/config.yaml") -> AppSettings:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
@@ -59,13 +60,8 @@ def load_settings(config_path: str = "config.yaml") -> AppSettings:
         print(f"FEHLER: Ein Fehler ist beim Laden oder Validieren der Konfiguration aufgetreten: {e}")
         raise
 
-# --- Globales Einstellungsobjekt ---
-# Die Einstellungen werden einmal beim Start geladen. Andere Module können dieses einzelne 'settings'-Objekt importieren.
-# Dieser Ansatz stellt sicher, dass die Konfiguration nur einmal geladen und validiert wird.
 try:
     settings = load_settings()
     print("Konfiguration erfolgreich geladen und validiert.")
 except Exception:
-    # Die Anwendung kann ohne gültige Einstellungen nicht laufen, daher bei Fehler beenden.
-    print("Beende aufgrund eines Konfigurationsfehlers.")
-    exit(1)
+    sys.exit(1)
