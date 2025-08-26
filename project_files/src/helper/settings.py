@@ -3,7 +3,7 @@ import yaml
 from pydantic import BaseModel, Field
 from typing import Dict, Any
 
-# --- Pydantic Models for Validation ---
+# --- Pydantic Models for Validation (remain unchanged) ---
 class ModelSettings(BaseModel):
     embedding_id: str
     reranker_id: str
@@ -46,22 +46,36 @@ class AppSettings(BaseModel):
     pipeline: PipelineSettings
     system: SystemSettings
 
-def load_settings(config_path: str = "helper/config.yaml") -> AppSettings:
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config_data = yaml.safe_load(f)
-        if not config_data:
-            raise ValueError("Konfigurationsdatei ist leer oder konnte nicht geparst werden.")
-        return AppSettings(**config_data)
-    except FileNotFoundError:
-        print(f"FEHLER: Konfigurationsdatei nicht gefunden unter '{config_path}'")
-        raise
-    except Exception as e:
-        print(f"FEHLER: Ein Fehler ist beim Laden oder Validieren der Konfiguration aufgetreten: {e}")
-        raise
+# --- Simplified Loading Function ---
+def load_settings_from_any_path(paths: list) -> AppSettings:
+    """
+    Tries to load the YAML configuration from a list of possible paths.
+    """
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                config_data = yaml.safe_load(f)
+            if config_data:
+                print(f"Konfiguration erfolgreich von '{path}' geladen und validiert.")
+                return AppSettings(**config_data)
+        except FileNotFoundError:
+            continue # Try the next path
+        except Exception as e:
+            print(f"FEHLER: Fehler beim Validieren der Konfiguration von '{path}': {e}")
+            raise
 
+    # If the loop finishes without finding a file
+    raise FileNotFoundError(f"FEHLER: Konfigurationsdatei konnte in keinem der Pfade gefunden werden: {paths}")
+
+# --- Main execution block ---
 try:
-    settings = load_settings()
-    print("Konfiguration erfolgreich geladen und validiert.")
-except Exception:
+    # List of paths to try, in order of priority
+    possible_paths = [
+        "./helper/config.yaml",
+        "./project_files/src/helper/config.yaml",
+        "config.yaml" # A fallback for the root directory
+    ]
+    settings = load_settings_from_any_path(possible_paths)
+except Exception as e:
+    print(e)
     sys.exit(1)
